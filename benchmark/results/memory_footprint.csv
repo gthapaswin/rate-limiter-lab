@@ -1,0 +1,17 @@
+algorithm,limit,memory_bytes,redis_bytes
+fixed_window,10,112,88
+fixed_window,100,112,88
+fixed_window,1000,112,88
+fixed_window,5000,112,88
+sliding_window_log,10,424,456
+sliding_window_log,100,3320,5192
+sliding_window_log,1000,32856,108208
+sliding_window_log,5000,161880,595120
+sliding_window_counter,10,148,96
+sliding_window_counter,100,148,96
+sliding_window_counter,1000,148,96
+sliding_window_counter,5000,148,96
+token_bucket,10,104,120
+token_bucket,100,104,120
+token_bucket,1000,104,120
+token_bucket,5000,104,120

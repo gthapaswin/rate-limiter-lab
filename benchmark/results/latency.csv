@@ -1,0 +1,5 @@
+algorithm,memory_us_per_call,redis_us_per_call
+fixed_window,0.32,117.72
+sliding_window_log,0.41,117.6
+sliding_window_counter,0.38,117.32
+token_bucket,0.34,120.21

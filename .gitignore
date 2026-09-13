@@ -16,9 +16,8 @@ env/
 .coverage
 htmlcov/
 
-# Benchmark artifacts are regenerated; keep the directory but ignore outputs
-benchmark/results/*.csv
-benchmark/results/*.png
+# Benchmark artifacts (CSVs + plots) ARE committed -- they're the headline
+# deliverable and are embedded in the README. Regenerate with run_benchmarks.py.
 
 # OS / editor
 .DS_Store
