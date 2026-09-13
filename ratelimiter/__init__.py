@@ -19,11 +19,13 @@ from .backends import Backend, MemoryBackend
 from .base import RateLimiter
 from .fixed_window import FixedWindowCounter
 from .sliding_window_log import SlidingWindowLog
+from .sliding_window_counter import SlidingWindowCounter
 
 #: Name -> algorithm class. Used by the demo app, benchmark, and ``build_limiter``.
 ALGORITHMS: dict[str, type[RateLimiter]] = {
     FixedWindowCounter.name: FixedWindowCounter,
     SlidingWindowLog.name: SlidingWindowLog,
+    SlidingWindowCounter.name: SlidingWindowCounter,
 }
 
 __all__ = [
@@ -32,6 +34,7 @@ __all__ = [
     "MemoryBackend",
     "FixedWindowCounter",
     "SlidingWindowLog",
+    "SlidingWindowCounter",
     "ALGORITHMS",
     "build_limiter",
 ]
