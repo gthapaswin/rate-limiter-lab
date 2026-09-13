@@ -180,6 +180,88 @@ Redis buys multi-instance correctness at the price of a network hop.
 
 ---
 
+## Adaptive limiter — switching algorithm by observed traffic shape
+
+The benchmark shows each algorithm makes a fixed trade-off. `AdaptiveRateLimiter`
+(in `ratelimiter/adaptive.py`) watches **each client's** traffic online and routes
+it to whichever algorithm fits its *current* shape — no advance decision required.
+
+- **Detection** (`TrafficDetector`): buckets recent arrivals into time bins over a
+  rolling horizon and uses the **peak-to-mean ratio** as a burstiness index
+  (evenly spaced → ~1 → steady; tight clusters + idle → spike → bursty; rising
+  bins → ramping). Binning over *time* rather than a fixed count of gaps is what
+  keeps a dense burst from hiding the surrounding idle period.
+- **Policy** (configurable): the default *tolerant* policy is
+  `steady → sliding_window_counter`, `bursty → token_bucket`; a `STRICT_POLICY`
+  swaps `bursty → sliding_window_log`.
+
+### The correctness catch (and the fix)
+
+Naive switching is **exploitable**: a freshly activated algorithm starts with an
+empty counter, so a mid-window switch hands the client a *second* full allowance
+(2x the limit). Two mechanisms prevent this:
+
+1. **Switch only at window boundaries** — within any one window exactly one
+   algorithm governs, so no counter is ever reset mid-window.
+2. **Prime on hand-off** — the incoming algorithm is seeded to a saturated state
+   (token bucket emptied, log filled) so it grants no fresh burst on top of what
+   the outgoing one already allowed in the adjacent window.
+
+Both are tested. Before the fix, the adaptive limiter peaked at **200 admits/window**
+during bursts (as bad as Fixed Window); after it, **109** — see below.
+
+### Evaluation — steady → bursty → steady, no advance knowledge
+
+`python benchmark/adaptive_eval.py` runs one mixed timeline through four strategies
+(`limit=100/1s`). Peak admits per window (should stay near 100):
+
+| Strategy | Steady peak | **Bursty peak** | Bursty admitted |
+|---|---:|---:|---:|
+| Fixed Window | 101 | **200** | 500 |
+| Sliding Window Counter | 101 | 110 | 500 |
+| Token Bucket | 101 | 119 | 509 |
+| **Adaptive** | 101 | **109** | 499 |
+
+![Adaptive evaluation](benchmark/results/adaptive_eval.png)
+
+The shaded bands show which algorithm the adaptive limiter selected over time; it
+made 4 switches and tracked the appropriate algorithm per phase automatically.
+
+### Does adaptation actually help? (honest answer)
+
+**On this workload, only marginally — and that's a real finding, not a failure.**
+A shape-robust single algorithm (Sliding Window Counter) already handles steady,
+bursty, and ramping traffic well, so adaptive lands right next to it in the
+numbers. Adaptive's clear win is only over **Fixed Window** (109 vs 200 peak) — but
+so is just *using* the counter.
+
+Where the adaptive layer genuinely earns its keep:
+
+- **You don't have to pre-commit to one algorithm** — it can't overshoot like
+  Fixed Window even if that's what a client's traffic would otherwise trigger.
+- **Per-client, per-shape policy** in one limiter — a bursty client can get
+  token-bucket tolerance while a steady client gets counter precision,
+  simultaneously, which no single-algorithm limiter offers.
+- **Cost-adaptive strict mode** — with `STRICT_POLICY`, a client pays the Sliding
+  Window Log's O(limit) memory *only while it is actually bursty*, not always.
+
+And the safety mechanism has a cost worth naming: priming the incoming algorithm
+means adaptive gives up token-bucket's burst *absorption* advantage right after a
+switch — so "safe adaptation" converges toward the robust single algorithm. That
+tension (burst reward vs. switch safety) is the honest takeaway.
+
+```python
+from ratelimiter import build_limiter
+from ratelimiter.adaptive import STRICT_POLICY
+
+rl = build_limiter("adaptive", "redis", limit=100, window=60)      # tolerant default
+rl = build_limiter("adaptive", "memory", limit=100, window=60,
+                   policy=STRICT_POLICY, min_dwell_windows=3)        # strict, slower to switch
+rl.stats("client-42")   # -> {'active': 'token_bucket', 'last_shape': 'bursty', 'switches': 2}
+```
+
+---
+
 ## Designed for reuse
 
 `ratelimiter/` contains **no application-specific code**. The middleware takes
@@ -222,13 +304,17 @@ ratelimiter/            # the reusable library (this is what gets packaged)
   sliding_window_log.py
   sliding_window_counter.py
   token_bucket.py
+  traffic_detector.py   # online traffic-shape classifier
+  adaptive.py           # AdaptiveRateLimiter: per-client algorithm switching
   backends/
     memory.py           # lock + dict
     redis_backend.py    # register_script / EVALSHA, atomic across instances
   middleware.py         # generic FastAPI middleware
 demo_app/main.py        # env-configured demo, used for the 2-instance test
-benchmark/              # load_generator.py + run_benchmarks.py + results/
-tests/test_algorithms.py# one parametrized suite over all algorithms x backends
+benchmark/              # load_generator.py, run_benchmarks.py, adaptive_eval.py, results/
+tests/
+  test_algorithms.py    # one parametrized suite over the 4 algorithms x backends
+  test_adaptive.py      # adaptive limiter: contract, anti-exploit, switching
 ```
 
 ## Testing

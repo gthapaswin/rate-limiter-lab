@@ -73,3 +73,15 @@ def root():
 @app.get("/ping")
 def ping():
     return {"pong": True, "instance": INSTANCE}
+
+
+@app.get("/rl-stats")
+def rl_stats():
+    """Adaptive-limiter introspection: which algorithm each seen client is on.
+
+    Only meaningful when RL_ALGORITHM=adaptive; returns a note otherwise.
+    """
+    snapshot = getattr(limiter, "snapshot", None)
+    if snapshot is None:
+        return {"adaptive": False, "algorithm": ALGORITHM}
+    return {"adaptive": True, "clients": snapshot()}

@@ -1,0 +1,13 @@
+strategy,phase,admitted,ideal,over_admit,peak_per_window
+fixed_window,phase0_steady,500,500.0,0.0,101
+fixed_window,phase1_bursty,500,500.0,0.0,200
+fixed_window,phase2_steady,500,500.0,0.0,101
+sliding_window_counter,phase0_steady,498,500.0,-2.0,101
+sliding_window_counter,phase1_bursty,500,500.0,0.0,110
+sliding_window_counter,phase2_steady,497,500.0,-3.0,101
+token_bucket,phase0_steady,500,500.0,0.0,101
+token_bucket,phase1_bursty,509,500.0,9.0,119
+token_bucket,phase2_steady,499,500.0,-1.0,101
+adaptive,phase0_steady,497,500.0,-3.0,101
+adaptive,phase1_bursty,499,500.0,-1.0,109
+adaptive,phase2_steady,499,500.0,-1.0,101

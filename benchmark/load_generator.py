@@ -85,6 +85,49 @@ def ramping_traffic(
     return ts
 
 
+def mixed_traffic(
+    limit: int,
+    window: float,
+    phase_windows: int = 5,
+    edge: float = 0.1,
+) -> tuple[list[float], list[tuple[float, float, str]]]:
+    """A three-phase timeline for the adaptive evaluation: steady -> bursty ->
+    steady. Returns ``(timestamps, phases)`` where ``phases`` is a list of
+    ``(start, end, label)`` so the evaluation can score each phase separately.
+
+    * Phase A (steady): evenly spaced arrivals at the limit rate.
+    * Phase B (bursty): a boundary-straddling spike each window.
+    * Phase C (steady): steady again, to show the limiter switching back.
+    """
+    ts: list[float] = []
+    rate = limit / window
+    per_phase = int(rate * phase_windows * window)
+
+    # Phase A -- steady at the limit.
+    ts += [i / rate for i in range(per_phase)]
+    a_end = phase_windows * window
+
+    # Phase B -- one 2x boundary burst per window.
+    for k in range(1, phase_windows + 1):
+        boundary = a_end + k * window
+        for j in range(limit):
+            ts.append(boundary - edge + edge * (j / limit))
+        for j in range(limit):
+            ts.append(boundary + 5e-4 + edge * (j / limit))
+    b_end = a_end + phase_windows * window
+
+    # Phase C -- steady again.
+    ts += [b_end + i / rate for i in range(per_phase)]
+    c_end = b_end + phase_windows * window
+
+    phases = [
+        (0.0, a_end, "steady"),
+        (a_end, b_end, "bursty"),
+        (b_end, c_end, "steady"),
+    ]
+    return sorted(ts), phases
+
+
 #: Registry so the runner can iterate shapes by name.
 SHAPES = {
     "constant": constant_traffic,

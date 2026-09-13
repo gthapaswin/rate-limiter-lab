@@ -82,6 +82,20 @@ class RateLimiter(ABC):
         result = self.backend.execute(self._py_op, self.LUA, [key], args)
         return bool(result[0])
 
+    def prime(self, client_id: str, now: float | None = None) -> None:
+        """Saturate this client's *burst capacity* as of ``now``.
+
+        Used by :class:`~ratelimiter.adaptive.AdaptiveRateLimiter` at a switch:
+        activating a fresh algorithm mid-stream must not hand the client a new
+        allowance on top of what the previous algorithm already granted in the
+        adjacent window (which would show up as ~2x in a trailing window that
+        straddles the switch). Algorithms with persistent burst state override
+        this to reset it conservatively (Token Bucket empties; Sliding Window Log
+        fills). Windowed counters are already correct when fresh at a boundary,
+        so the default is a no-op.
+        """
+        return None
+
     # -------------------------------------------------------------- subclass API
     @abstractmethod
     def _build_args(self, now: float) -> list:

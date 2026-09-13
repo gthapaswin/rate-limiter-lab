@@ -19,6 +19,7 @@ independently (Section 5's "known weakness": these must be set deliberately).
 from __future__ import annotations
 
 import math
+import time
 
 from .backends.base import Backend
 from .base import RateLimiter
@@ -71,6 +72,28 @@ class TokenBucket(RateLimiter):
     redis.call('EXPIRE', key, math.ceil(capacity / rate) + 1)
     return {allowed, math.floor(tokens)}
     """
+
+    # On an adaptive switch, empty the bucket: a client we just activated because
+    # it looks bursty must earn its burst back, not receive a full one for free.
+    PRIME_LUA = """
+    local key = KEYS[1]
+    local now = tonumber(ARGV[1])
+    redis.call('HMSET', key, 't', 0, 'ts', now)
+    redis.call('EXPIRE', key, math.ceil(tonumber(ARGV[2])) + 1)
+    return {1}
+    """
+
+    def prime(self, client_id: str, now: float | None = None) -> None:
+        if now is None:
+            now = time.time()
+        key = f"{self.namespace}:{self.name}:{client_id}"
+        ttl = self.capacity / self.refill_rate if self.refill_rate else self.window
+        self.backend.execute(self._prime_py_op, self.PRIME_LUA, [key], [now, ttl])
+
+    @staticmethod
+    def _prime_py_op(store: dict, keys: list, args: list) -> list:
+        store[keys[0]] = (0.0, args[0])  # empty bucket, last-refill = now
+        return [1]
 
     def _build_args(self, now: float) -> list:
         return [now, self.capacity, self.refill_rate]

@@ -128,11 +128,11 @@ class AdaptiveRateLimiter(RateLimiter):
         # Re-select only when a new window starts -> one algorithm per window.
         if w != st.last_check_window:
             st.last_check_window = w
-            self._reselect(st)
+            self._reselect(st, client_id, now)
 
         return self._algos[st.active].allow_request(client_id, now=now)
 
-    def _reselect(self, st: _ClientState) -> None:
+    def _reselect(self, st: _ClientState, client_id: str, now: float) -> None:
         shape = st.detector.classify()
         st.last_shape = shape
         desired = self.policy.get(shape, st.active)
@@ -151,6 +151,10 @@ class AdaptiveRateLimiter(RateLimiter):
             st.active = desired
             st.switches += 1
             st.pending, st.pending_count = None, 0
+            # Conservative hand-off: don't let the freshly activated algorithm
+            # grant a burst on top of what the previous one already allowed in
+            # the adjacent window (prevents ~2x in a boundary-straddling window).
+            self._algos[desired].prime(client_id, now)
 
     # --------------------------------------------------------- observability
     def stats(self, client_id: str) -> dict | None:
