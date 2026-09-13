@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ratelimiter-lab"
+version = "0.1.0"
+description = "Four rate-limiting algorithms behind one interface, with in-memory and Redis (Lua-atomic) backends, benchmarked against simulated traffic."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "gthapaswin" }]
+keywords = ["rate-limiting", "redis", "fastapi", "middleware", "benchmark"]
+
+dependencies = [
+    "redis>=5.0",
+]
+
+[project.optional-dependencies]
+# Everything needed to run the demo app + its middleware
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
+# Everything needed to run the benchmark harness
+benchmark = ["httpx>=0.27", "matplotlib>=3.8"]
+# Test suite
+test = ["pytest>=8.0"]
+# Convenience: install everything
+all = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+    "matplotlib>=3.8",
+    "pytest>=8.0",
+]
+
+[tool.setuptools]
+# Only the reusable library is packaged; demo_app/benchmark/tests stay out of the wheel.
+packages = ["ratelimiter", "ratelimiter.backends"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

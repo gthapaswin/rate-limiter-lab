@@ -1,0 +1,13 @@
+# Core library
+redis>=5.0
+
+# Demo app + middleware
+fastapi>=0.110
+uvicorn[standard]>=0.29
+
+# Benchmark harness
+httpx>=0.27
+matplotlib>=3.8
+
+# Testing
+pytest>=8.0

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Testing / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Benchmark artifacts are regenerated; keep the directory but ignore outputs
+benchmark/results/*.csv
+benchmark/results/*.png
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

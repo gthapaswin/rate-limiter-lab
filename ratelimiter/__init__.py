@@ -1,0 +1,68 @@
+"""ratelimiter -- four interchangeable rate-limiting algorithms.
+
+Public API::
+
+    from ratelimiter import build_limiter
+    limiter = build_limiter("fixed_window", "memory", limit=10, window=60)
+    limiter.allow_request("client-42")  # -> True / False
+
+Algorithms and backends can also be imported directly and composed by hand.
+
+More algorithms are registered in ``ALGORITHMS`` as they are implemented across
+the build phases (fixed window, sliding window log, sliding window counter,
+token bucket).
+"""
+
+from __future__ import annotations
+
+from .backends import Backend, MemoryBackend
+from .base import RateLimiter
+from .fixed_window import FixedWindowCounter
+
+#: Name -> algorithm class. Used by the demo app, benchmark, and ``build_limiter``.
+ALGORITHMS: dict[str, type[RateLimiter]] = {
+    FixedWindowCounter.name: FixedWindowCounter,
+}
+
+__all__ = [
+    "RateLimiter",
+    "Backend",
+    "MemoryBackend",
+    "FixedWindowCounter",
+    "ALGORITHMS",
+    "build_limiter",
+]
+
+
+def build_limiter(
+    algorithm: str,
+    backend: str = "memory",
+    *,
+    limit: int = 10,
+    window: float = 60.0,
+    namespace: str = "rl",
+    redis_url: str = "redis://localhost:6379/0",
+    **kwargs,
+) -> RateLimiter:
+    """Construct an algorithm + backend pair from plain configuration.
+
+    This is the single entry point the demo middleware and any importing project
+    (e.g. the URL shortener) use, so nothing application-specific leaks into the
+    library.
+    """
+    if algorithm not in ALGORITHMS:
+        raise ValueError(
+            f"unknown algorithm {algorithm!r}; choose from {sorted(ALGORITHMS)}"
+        )
+
+    if backend == "memory":
+        backend_obj: Backend = MemoryBackend()
+    elif backend == "redis":
+        from .backends.redis_backend import RedisBackend
+
+        backend_obj = RedisBackend(redis_url)
+    else:
+        raise ValueError(f"unknown backend {backend!r}; choose 'memory' or 'redis'")
+
+    algo_cls = ALGORITHMS[algorithm]
+    return algo_cls(backend_obj, limit=limit, window=window, namespace=namespace, **kwargs)

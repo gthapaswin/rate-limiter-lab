@@ -1,0 +1,45 @@
+# Redis + two demo-app instances behind the same Redis.
+#
+# The two app instances (demo1 on :8001, demo2 on :8002) exist to prove the
+# Redis backend enforces ONE shared limit across processes, not one-per-instance.
+# Put them behind any load balancer (or just curl both) and the aggregate limit holds.
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  demo1:
+    build: .
+    command: uvicorn demo_app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      RL_ALGORITHM: token_bucket
+      RL_BACKEND: redis
+      RL_LIMIT: "10"
+      RL_WINDOW: "60"
+      RL_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8001:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  demo2:
+    build: .
+    command: uvicorn demo_app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      RL_ALGORITHM: token_bucket
+      RL_BACKEND: redis
+      RL_LIMIT: "10"
+      RL_WINDOW: "60"
+      RL_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8002:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
