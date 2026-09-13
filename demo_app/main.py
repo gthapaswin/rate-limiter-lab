@@ -22,9 +22,10 @@ import os
 import socket
 
 from fastapi import FastAPI
+from starlette.requests import Request
 
 from ratelimiter import build_limiter
-from ratelimiter.middleware import RateLimitMiddleware
+from ratelimiter.middleware import RateLimitMiddleware, default_key_func
 
 ALGORITHM = os.getenv("RL_ALGORITHM", "fixed_window")
 BACKEND = os.getenv("RL_BACKEND", "memory")
@@ -40,8 +41,18 @@ limiter = build_limiter(
     redis_url=REDIS_URL,
 )
 
+def key_func(request: Request) -> str:
+    """Prefer an explicit ``X-Client-Id`` header, else fall back to source IP.
+
+    The header makes the multi-instance demo deterministic: curl both instances
+    with the same ``X-Client-Id`` and they must share one aggregate limit,
+    regardless of the (Docker-assigned) source IP each container observes.
+    """
+    return request.headers.get("x-client-id") or default_key_func(request)
+
+
 app = FastAPI(title="Rate Limiter Demo")
-app.add_middleware(RateLimitMiddleware, limiter=limiter)
+app.add_middleware(RateLimitMiddleware, limiter=limiter, key_func=key_func)
 
 # Identifies which process answered -- handy when two instances share one Redis.
 INSTANCE = socket.gethostname()
