@@ -18,10 +18,12 @@ from __future__ import annotations
 from .backends import Backend, MemoryBackend
 from .base import RateLimiter
 from .fixed_window import FixedWindowCounter
+from .sliding_window_log import SlidingWindowLog
 
 #: Name -> algorithm class. Used by the demo app, benchmark, and ``build_limiter``.
 ALGORITHMS: dict[str, type[RateLimiter]] = {
     FixedWindowCounter.name: FixedWindowCounter,
+    SlidingWindowLog.name: SlidingWindowLog,
 }
 
 __all__ = [
@@ -29,6 +31,7 @@ __all__ = [
     "Backend",
     "MemoryBackend",
     "FixedWindowCounter",
+    "SlidingWindowLog",
     "ALGORITHMS",
     "build_limiter",
 ]
