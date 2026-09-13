@@ -1,22 +1,59 @@
 # rate-limiter-lab
 
-Four rate-limiting algorithms behind one interface, each runnable against an
-in-memory backend (single process) or a Redis backend (multi-instance correct,
-via atomic Lua scripting). Includes a benchmark harness that drives constant,
-bursty, and ramping traffic through every algorithm/backend combination and a
-FastAPI middleware that ships the result as reusable production code.
+Four rate-limiting algorithms behind **one interface**, each runnable against an
+**in-memory** backend (single process) or a **Redis** backend (multi-instance
+correct, via atomic Lua scripting). Ships with a benchmark harness that drives
+constant, bursty, and ramping traffic through every algorithm/backend
+combination, and a FastAPI middleware that turns the winner into reusable
+production code.
 
-> Status: under construction — built in phases. This README is filled in with
-> real measured findings once the benchmark runs (Phase 8–9).
+The point isn't "implement a rate limiter" — it's to **measure** how the four
+classic algorithms actually differ and let the numbers pick the default.
+
+---
 
 ## The four algorithms
 
-| Algorithm | Core idea | Weakness to watch |
-|---|---|---|
-| Fixed Window Counter | Count per fixed clock bucket, reset at the boundary | ~2x burst across a boundary |
-| Sliding Window Log | Timestamp per request, count those in the trailing window | Accurate but O(n) memory per client |
-| Sliding Window Counter | Weighted blend of current + previous window | O(1) memory, slightly approximate |
-| Token Bucket | Bucket refills at a fixed rate; each request spends a token | Allows tuned bursts up to bucket size |
+| Algorithm | Core idea | Memory/client | Burst behaviour |
+|---|---|---|---|
+| **Fixed Window Counter** | Count per fixed clock bucket, reset at the boundary | O(1) | Leaky: admits ~2x at boundaries |
+| **Sliding Window Log** | One timestamp per request; count those in the trailing window | **O(limit)** | Exact |
+| **Sliding Window Counter** | Weighted blend of current + previous window counts | O(1) | Near-exact |
+| **Token Bucket** | Bucket refills at a fixed rate; each request spends a token | O(1) | Tunable burst up to bucket size |
+
+---
+
+## Architecture — how one interface fits four algorithms and two backends
+
+Every algorithm subclasses `RateLimiter` and exposes exactly one public method,
+`allow_request(client_id) -> bool`. The trick that keeps algorithm logic and
+storage fully separate is that each algorithm expresses its atomic
+*read-counter → decide → write-counter* step **twice**:
+
+- a **pure-Python callable** (`_py_op`), run under a lock by the in-memory backend, and
+- an equivalent **Lua script** (`LUA`), run atomically by Redis.
+
+A backend knows nothing about which algorithm it runs — it only knows how to
+execute one of those two forms atomically. That is what makes swapping in-memory
+→ Redis (for correctness across many server instances) a **one-line config
+change** with zero edits to algorithm code.
+
+```
+        allow_request(client_id)
+                 │
+        RateLimiter subclass  ── builds numeric args, picks key
+                 │
+          Backend.execute(py_op, lua, keys, args)
+            ┌────┴─────────────┐
+   MemoryBackend           RedisBackend
+   (lock + dict,           (EVALSHA the Lua script,
+    runs py_op)             atomic across processes)
+```
+
+See `ratelimiter/base.py` for the contract and any algorithm file (e.g.
+`ratelimiter/token_bucket.py`) for the paired Python/Lua implementations.
+
+---
 
 ## Quick start
 
@@ -24,27 +61,182 @@ FastAPI middleware that ships the result as reusable production code.
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[all]"
 
-# exercise the library directly
+# use the library directly
 python -c "from ratelimiter import build_limiter; \
-rl = build_limiter('fixed_window','memory',limit=5,window=60); \
+rl = build_limiter('token_bucket','memory',limit=5,window=60); \
 print([rl.allow_request('me') for _ in range(7)])"
+# -> [True, True, True, True, True, False, False]
+
+# run the test suite (Redis tests auto-skip if no Redis is running)
+pytest -q
 ```
 
 ## Run the demo app
 
 ```bash
 uvicorn demo_app.main:app --reload
-# in another shell, send more than the limit and watch for 429s:
+# in another shell — send more than the limit and watch for 429s:
 for i in $(seq 1 15); do curl -s -o /dev/null -w "%{http_code}\n" localhost:8000/ping; done
 ```
 
-Configuration is via environment variables (`RL_ALGORITHM`, `RL_BACKEND`,
-`RL_LIMIT`, `RL_WINDOW`, `RL_REDIS_URL`).
+Everything is env-configured: `RL_ALGORITHM`, `RL_BACKEND`, `RL_LIMIT`,
+`RL_WINDOW`, `RL_REDIS_URL`.
 
-## Architecture
+## Prove multi-instance correctness (the Redis payoff)
 
-See `ratelimiter/base.py`. Each algorithm expresses its atomic "read counter →
-decide → write" step twice: once in Python (run under a lock by the in-memory
-backend) and once in Lua (run atomically by Redis). Backends know nothing about
-the algorithms; algorithms know nothing about storage. That is what makes the
-in-memory ↔ Redis swap a one-line config change.
+```bash
+docker compose up -d --build          # Redis + two demo instances (:8001, :8002)
+
+# 16 requests split across BOTH instances, same client id:
+for i in $(seq 1 16); do
+  port=$([ $((i%2)) -eq 1 ] && echo 8001 || echo 8002)
+  curl -s -o /dev/null -w "%{http_code}\n" -H "X-Client-Id: alice" localhost:$port/ping
+done
+# -> ten 200s then 429s. The limit of 10 is shared across the two processes,
+#    not enforced 10-per-instance. Atomic Lua scripting is what guarantees this.
+```
+
+Measured: two instances behind one Redis admitted **exactly 10** total (limit=10)
+then 429'd — from two distinct container hostnames.
+
+## Run the benchmark
+
+```bash
+python benchmark/run_benchmarks.py
+# writes CSVs + PNGs into benchmark/results/
+```
+
+---
+
+## Findings
+
+All numbers below are **measured**, not estimated (`limit=100`, `window=1s`,
+10s of simulated traffic per shape; full data in `benchmark/results/*.csv`).
+Memory and Redis backends produced identical admit/reject decisions in every
+scenario — confirming the two backends implement the same algorithms.
+
+### 1. Burst tolerance — the headline
+
+Worst-case **admitted requests inside any single trailing window** during the
+bursty scenario (a correct limiter should never exceed the limit of 100):
+
+| Algorithm | Peak admits / window | Verdict |
+|---|---:|---|
+| Fixed Window | **200** | 2x overshoot at boundaries — the classic flaw, reproduced |
+| Sliding Window Log | **100** | Exact — never exceeds the limit |
+| Sliding Window Counter | **112** | Near-exact; small approximation error |
+| Token Bucket | **123** | Deliberate burst allowance |
+
+![Burst tolerance](benchmark/results/burst_tolerance.png)
+
+Fixed Window climbs in **+200 steps** at each boundary-straddling burst; the true
+sliding window holds every burst to 100.
+
+### 2. Memory footprint — the other clean separation
+
+Bytes stored per client as the limit grows (in-memory backend):
+
+| limit | Fixed Window | Sliding **Log** | Sliding Counter | Token Bucket |
+|---:|---:|---:|---:|---:|
+| 10 | 112 B | 424 B | 148 B | 104 B |
+| 100 | 112 B | 3.3 KB | 148 B | 104 B |
+| 1000 | 112 B | 32.9 KB | 148 B | 104 B |
+| 5000 | 112 B | **161.9 KB** | 148 B | 104 B |
+
+![Memory footprint](benchmark/results/memory_footprint.png)
+
+The Sliding Window Log is **O(limit)** — ~1000x heavier than the others at
+`limit=5000` — because it stores one timestamp per in-window request. Every other
+algorithm is flat O(1). (Redis reports the same story: 456 B → 595 KB for the log.)
+
+### 3. Latency overhead
+
+Per `allow_request()` call, averaged over thousands of calls:
+
+| Backend | Cost / call | Notes |
+|---|---:|---|
+| in-memory | ~0.3–0.4 µs | dict + lock; algorithm choice barely matters |
+| Redis (localhost) | ~117–120 µs | dominated by the network round-trip, not the Lua |
+
+![Latency](benchmark/results/latency.png)
+
+Backend choice moves latency by **~350x**; algorithm choice is noise next to it.
+Redis buys multi-instance correctness at the price of a network hop.
+
+### Which one wins?
+
+**It depends on the goal, and the data says so clearly:**
+
+- **Sliding Window Counter is the best general-purpose default.** It matches the
+  Sliding Window Log's accuracy (peak 112 vs 100) at **flat O(1) memory** (148 B
+  vs up to 162 KB) and identical latency. You get sliding-window quality without
+  the log's memory blow-up.
+- **Token Bucket** is the pick when short bursts are a *feature* — it admits
+  tuned bursts (peak 123–161) while holding the long-run average to the limit.
+- **Sliding Window Log** is the accuracy gold standard but only worth its memory
+  cost at small limits or when exactness is non-negotiable.
+- **Fixed Window** is the cheapest and simplest, but its 2x boundary overshoot
+  makes it the weakest choice for real abuse protection.
+
+---
+
+## Designed for reuse
+
+`ratelimiter/` contains **no application-specific code**. The middleware takes
+its algorithm, backend, limit, and client-key function as configuration, so a
+second project can mount several limiters with different policies. For example, a
+URL shortener applying a strict limit to writes and a loose one to reads:
+
+```python
+from fastapi import FastAPI
+from ratelimiter import build_limiter
+from ratelimiter.middleware import RateLimitMiddleware
+
+app = FastAPI()
+
+# strict: 5 writes/min on the create endpoint
+writes = build_limiter("token_bucket", "redis", limit=5, window=60, namespace="writes")
+# loose: 1000 reads/min on the redirect endpoint
+reads = build_limiter("sliding_window_counter", "redis", limit=1000, window=60, namespace="reads")
+
+# mount per-router, or select the limiter inside a dependency by path — the
+# library imposes no policy of its own.
+```
+
+Install it into another project straight from this repo:
+
+```bash
+pip install -e /path/to/rate-limiter-lab      # editable
+# or
+pip install git+https://github.com/gthapaswin/rate-limiter-lab.git
+```
+
+---
+
+## Repository layout
+
+```
+ratelimiter/            # the reusable library (this is what gets packaged)
+  base.py               # RateLimiter interface + shared allow_request flow
+  fixed_window.py       # each algorithm: paired _py_op (Python) + LUA (Redis)
+  sliding_window_log.py
+  sliding_window_counter.py
+  token_bucket.py
+  backends/
+    memory.py           # lock + dict
+    redis_backend.py    # register_script / EVALSHA, atomic across instances
+  middleware.py         # generic FastAPI middleware
+demo_app/main.py        # env-configured demo, used for the 2-instance test
+benchmark/              # load_generator.py + run_benchmarks.py + results/
+tests/test_algorithms.py# one parametrized suite over all algorithms x backends
+```
+
+## Testing
+
+```bash
+pytest -q          # 32 tests: 4 algorithms x 2 backends x 4 contract tests
+```
+
+The suite parametrizes over the algorithm registry, so every algorithm is held
+to the same contract automatically. Redis-backed cases skip cleanly when no
+Redis is reachable.
