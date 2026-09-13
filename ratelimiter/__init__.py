@@ -20,12 +20,14 @@ from .base import RateLimiter
 from .fixed_window import FixedWindowCounter
 from .sliding_window_log import SlidingWindowLog
 from .sliding_window_counter import SlidingWindowCounter
+from .token_bucket import TokenBucket
 
 #: Name -> algorithm class. Used by the demo app, benchmark, and ``build_limiter``.
 ALGORITHMS: dict[str, type[RateLimiter]] = {
     FixedWindowCounter.name: FixedWindowCounter,
     SlidingWindowLog.name: SlidingWindowLog,
     SlidingWindowCounter.name: SlidingWindowCounter,
+    TokenBucket.name: TokenBucket,
 }
 
 __all__ = [
@@ -35,6 +37,7 @@ __all__ = [
     "FixedWindowCounter",
     "SlidingWindowLog",
     "SlidingWindowCounter",
+    "TokenBucket",
     "ALGORITHMS",
     "build_limiter",
 ]
